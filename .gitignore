@@ -56,3 +56,6 @@ uploads/
 *.key
 tokens.json
 .nitrostudio/
+
+# Local verification output
+*.inspect.ndjson

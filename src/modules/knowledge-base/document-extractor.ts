@@ -1,8 +1,8 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import mammoth from 'mammoth';
-import pdfParse from 'pdf-parse';
-import * as XLSX from 'xlsx';
+import { PDFParse } from 'pdf-parse';
+import XLSX from 'xlsx';
 
 export const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
   '.md', '.txt', '.csv', '.json', '.pdf', '.docx', '.xlsx'
@@ -48,8 +48,13 @@ export async function extractDocumentText(filePath: string): Promise<string> {
 
   if (extension === '.pdf') {
     const buffer = await fs.readFile(filePath);
-    const result = await pdfParse(buffer);
-    return result.text.trim();
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text.trim();
+    } finally {
+      await parser.destroy();
+    }
   }
 
   if (extension === '.docx') {
