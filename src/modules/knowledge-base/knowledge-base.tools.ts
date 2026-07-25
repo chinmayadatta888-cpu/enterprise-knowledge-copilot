@@ -276,6 +276,57 @@ export class KnowledgeBaseTools {
     };
   }
 
+  /** Keep only meaningful lines when comparing two Markdown documents. */
+  private getComparableLines(content: string): string[] {
+    return content
+      .split('\n')
+      .map(line => this.stripMarkdown(line))
+      .filter(line => line.length > 0);
+  }
+
+  @Tool({
+    name: 'compareDocuments',
+    description: 'Compare two approved Markdown documents and show meaningful additions and removals',
+    inputSchema: z.object({
+      olderFilename: z.string().min(1).describe('Older Markdown filename, for example atlas-api-v1.md'),
+      newerFilename: z.string().min(1).describe('Newer Markdown filename, for example atlas-api-v2.md')
+    })
+  })
+  async compareDocuments(input: any, ctx: ExecutionContext): Promise<any> {
+    const olderFilename = input.olderFilename?.trim();
+    const newerFilename = input.newerFilename?.trim();
+
+    this.validateFilename(olderFilename);
+    this.validateFilename(newerFilename);
+
+    const olderPath = this.resolveFilePath(olderFilename);
+    const newerPath = this.resolveFilePath(newerFilename);
+    const olderContent = fs.readFileSync(olderPath, 'utf-8');
+    const newerContent = fs.readFileSync(newerPath, 'utf-8');
+
+    const olderLines = this.getComparableLines(olderContent);
+    const newerLines = this.getComparableLines(newerContent);
+    const olderSet = new Set(olderLines);
+    const newerSet = new Set(newerLines);
+    const added = newerLines.filter(line => !olderSet.has(line)).slice(0, 10);
+    const removed = olderLines.filter(line => !newerSet.has(line)).slice(0, 10);
+
+    ctx.logger.info('Compared documents', {
+      olderFilename,
+      newerFilename,
+      addedCount: added.length,
+      removedCount: removed.length
+    });
+
+    return {
+      olderDocument: { filename: olderFilename, title: this.extractTitle(olderContent) },
+      newerDocument: { filename: newerFilename, title: this.extractTitle(newerContent) },
+      added,
+      removed,
+      summary: `${added.length} meaningful addition(s) and ${removed.length} meaningful removal(s) were found.`
+    };
+  }
+
   @Tool({
     name: 'searchKnowledgeBase',
     description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
