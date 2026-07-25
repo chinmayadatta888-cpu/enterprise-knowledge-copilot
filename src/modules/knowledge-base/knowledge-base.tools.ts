@@ -404,6 +404,87 @@ export class KnowledgeBaseTools {
     };
   }
 
+  /** Extract a labelled Markdown metadata value, such as **Version:** 2.0. */
+  private extractMetadata(content: string, label: string): string | undefined {
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = content.match(new RegExp(`^\\*\\*${escapedLabel}:\\*\\*\\s*(.+)$`, 'mi'));
+    return match?.[1].trim();
+  }
+
+  private inferCategory(filename: string, content: string): string {
+    const haystack = `${filename} ${content}`.toLowerCase();
+    if (haystack.includes('api')) return 'API Documentation';
+    if (haystack.includes('sop') || haystack.includes('standard operating procedure')) return 'SOP';
+    if (haystack.includes('meeting')) return 'Meeting Notes';
+    return 'Project Documentation';
+  }
+
+  @Tool({
+    name: 'getKnowledgeCatalog',
+    description: 'List approved knowledge-base documents with metadata and lifecycle warnings',
+    inputSchema: z.object({
+      status: z.string().optional().describe('Optional status filter, such as Current or Deprecated')
+    })
+  })
+  async getKnowledgeCatalog(input: any, ctx: ExecutionContext): Promise<any> {
+    const requestedStatus = input.status?.trim().toLowerCase();
+    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
+    if (!fs.existsSync(knowledgeBasePath)) {
+      throw new Error('Knowledge base directory not found');
+    }
+
+    const documents = fs.readdirSync(knowledgeBasePath)
+      .filter(file => file.endsWith('.md'))
+      .sort()
+      .map(filename => {
+        const content = fs.readFileSync(path.join(knowledgeBasePath, filename), 'utf-8');
+        const version = this.extractMetadata(content, 'Version');
+        const status = this.extractMetadata(content, 'Status');
+        const lastUpdated = this.extractMetadata(content, 'Last Updated')
+          || this.extractMetadata(content, 'Released')
+          || this.extractMetadata(content, 'Date');
+        const lifecycleWarnings: string[] = [];
+        const lowerContent = content.toLowerCase();
+
+        if (!status) lifecycleWarnings.push('Missing document status');
+        if (!version) lifecycleWarnings.push('Missing version');
+        if (!lastUpdated) lifecycleWarnings.push('Missing last-updated or release date');
+        if (/deprecated|sunset|end of life/.test(lowerContent)) {
+          lifecycleWarnings.push('Contains deprecation or sunset information');
+        }
+
+        return {
+          filename,
+          title: this.extractTitle(content),
+          version: version || 'Not specified',
+          status: status || 'Not specified',
+          lastUpdated: lastUpdated || 'Not specified',
+          category: this.inferCategory(filename, content),
+          lifecycleWarnings
+        };
+      })
+      .filter(document => !requestedStatus || document.status.toLowerCase() === requestedStatus);
+
+    const deprecatedDocuments = documents.filter(document =>
+      document.status.toLowerCase().includes('deprecated')
+      || document.lifecycleWarnings.includes('Contains deprecation or sunset information')
+    );
+    const documentsNeedingReview = documents.filter(document => document.lifecycleWarnings.length > 0);
+
+    ctx.logger.info('Knowledge catalog generated', {
+      totalDocuments: documents.length,
+      requestedStatus: requestedStatus || 'all'
+    });
+
+    return {
+      documents,
+      totalDocuments: documents.length,
+      documentsNeedingReview,
+      deprecatedDocuments,
+      catalogSummary: `${documents.length} document(s) found; ${documentsNeedingReview.length} need review and ${deprecatedDocuments.length} are deprecated or have a sunset notice.`
+    };
+  }
+
   @Tool({
     name: 'searchKnowledgeBase',
     description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
