@@ -1,5 +1,4 @@
 import { McpApp, Module, ConfigModule } from '@nitrostack/core';
-import { CalculatorModule } from './modules/calculator/calculator.module.js';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module.js';
 import { ActionItemsModule } from './modules/action-items/action-items.module.js';
 import { SystemHealthCheck } from './health/system.health.js';
@@ -13,7 +12,7 @@ import { SystemHealthCheck } from './health/system.health.js';
 @McpApp({
   module: AppModule,
   server: {
-    name: 'calculator-server',
+    name: 'enterprise-knowledge-copilot',
     version: '1.0.0'
   },
   logging: {
@@ -25,7 +24,6 @@ import { SystemHealthCheck } from './health/system.health.js';
   description: 'Root application module',
   imports: [
     ConfigModule.forRoot(),
-    CalculatorModule,
     KnowledgeBaseModule,
     ActionItemsModule
   ],
@@ -35,4 +33,3 @@ import { SystemHealthCheck } from './health/system.health.js';
   ]
 })
 export class AppModule {}
-

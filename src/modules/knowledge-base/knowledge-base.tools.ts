@@ -1,4 +1,4 @@
-import { ToolDecorator as Tool, ExecutionContext, z } from '@nitrostack/core';
+import { ToolDecorator as Tool, Widget, ExecutionContext, z } from '@nitrostack/core';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -335,6 +335,7 @@ export class KnowledgeBaseTools {
       newerFilename: z.string().min(1).describe('Newer Markdown filename, for example atlas-api-v2.md')
     })
   })
+  @Widget('change-impact-dashboard')
   async analyzeChangeImpact(input: any, ctx: ExecutionContext): Promise<any> {
     const olderFilename = input.olderFilename?.trim();
     const newerFilename = input.newerFilename?.trim();

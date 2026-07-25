@@ -2,47 +2,26 @@
   "version": "1.0.0",
   "widgets": [
     {
-      "uri": "/calculator-result",
-      "name": "Calculator Result",
-      "description": "Displays the result of a calculation with operation details",
+      "uri": "/change-impact-dashboard",
+      "name": "Change Impact Dashboard",
+      "description": "Displays document-change priority, affected teams, and recommended follow-up actions",
       "examples": [
         {
-          "name": "Addition Example",
-          "description": "Shows the result of adding 5 + 3",
+          "name": "Atlas API migration impact",
+          "description": "Shows the organizational impact of the Atlas API v1 to v2 migration",
           "data": {
-            "operation": "add",
-            "a": 5,
-            "b": 3,
-            "result": 8,
-            "expression": "5 + 3 = 8"
-          }
-        },
-        {
-          "name": "Multiplication Example",
-          "description": "Shows the result of multiplying 6 × 7",
-          "data": {
-            "operation": "multiply",
-            "a": 6,
-            "b": 7,
-            "result": 42,
-            "expression": "6 × 7 = 42"
-          }
-        },
-        {
-          "name": "Division Example",
-          "description": "Shows the result of dividing 20 ÷ 4",
-          "data": {
-            "operation": "divide",
-            "a": 20,
-            "b": 4,
-            "result": 5,
-            "expression": "20 ÷ 4 = 5"
+            "olderFilename": "atlas-api-v1.md",
+            "newerFilename": "atlas-api-v2.md",
+            "priority": "critical",
+            "affectedTeams": ["Backend Engineering", "Security", "Frontend and Integrations"],
+            "recommendedActions": ["Update authentication configuration and securely obtain the required OAuth credentials.", "Update API endpoint URLs in all client integrations."],
+            "changeHighlights": ["OAuth 2.0 is now required", "Reports endpoint changed to /analytics/reports"],
+            "removedHighlights": ["API key-only requests are no longer supported"]
           }
         }
       ],
-      "tags": ["calculator", "math", "result"]
+      "tags": ["enterprise", "knowledge", "change-management", "impact"]
     }
   ],
-  "generatedAt": "2025-01-01T00:00:00.000Z"
+  "generatedAt": "2026-07-25T00:00:00.000Z"
 }
-
