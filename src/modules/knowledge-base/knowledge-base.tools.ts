@@ -1,6 +1,7 @@
 import { ToolDecorator as Tool, Widget, ExecutionContext, z } from '@nitrostack/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import { extractDocumentText, getDocumentType, isSupportedDocument, titleFromFilename } from './document-extractor.js';
 
 interface KnowledgeBaseMatch {
   filename: string;
@@ -9,6 +10,7 @@ interface KnowledgeBaseMatch {
   reason: string;
   relevanceScore: number;
   matchedTerms: string[];
+  fileType: string;
 }
 
 /**
@@ -205,8 +207,8 @@ export class KnowledgeBaseTools {
       throw new Error('Invalid filename: only safe relative paths inside knowledge-base are allowed');
     }
 
-    if (!filename.endsWith('.md')) {
-      throw new Error('Invalid filename: only Markdown files (.md) are allowed');
+    if (!isSupportedDocument(filename)) {
+      throw new Error('Unsupported file type. Allowed types: .md, .txt, .csv, .json, .pdf, .docx, .xlsx');
     }
   }
 
@@ -233,13 +235,23 @@ export class KnowledgeBaseTools {
     return filePath;
   }
 
+  private async readDocument(filename: string): Promise<{ content: string; title: string; fileType: string }> {
+    const content = await extractDocumentText(this.resolveFilePath(filename));
+    const extractedTitle = this.extractTitle(content);
+    return {
+      content,
+      title: extractedTitle === 'Untitled Document' ? titleFromFilename(filename) : extractedTitle,
+      fileType: getDocumentType(filename)
+    };
+  }
+
   /** Return every approved Markdown file beneath the knowledge-base root. */
   private getKnowledgeBaseFiles(): string[] {
     const knowledgeBasePath = path.resolve(process.cwd(), 'knowledge-base');
     const walk = (directory: string): string[] => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
       const fullPath = path.join(directory, entry.name);
       if (entry.isDirectory()) return walk(fullPath);
-      if (entry.isFile() && entry.name.endsWith('.md')) {
+      if (entry.isFile() && isSupportedDocument(entry.name)) {
         return [path.relative(knowledgeBasePath, fullPath).split(path.sep).join('/')];
       }
       return [];
@@ -381,9 +393,9 @@ export class KnowledgeBaseTools {
 
   @Tool({
     name: 'getDocument',
-    description: 'Retrieve a Markdown document from the knowledge-base folder by filename',
+    description: 'Retrieve an approved document from the knowledge-base folder by safe relative path. Supports Markdown, text, CSV, JSON, PDF, Word, and Excel files.',
     inputSchema: z.object({
-      filename: z.string().min(1).describe('Name of the Markdown file to retrieve (e.g., atlas-api-v2.md)')
+      filename: z.string().min(1).describe('Safe relative path of the document to retrieve (e.g., apis/inventory-api-v2.md)')
     }),
     examples: {
       request: {
@@ -398,46 +410,19 @@ export class KnowledgeBaseTools {
   })
   async getDocument(input: any, ctx: ExecutionContext): Promise<any> {
     const filename = input.filename?.trim();
-
-    if (!filename) {
-      throw new Error('Filename parameter is required and cannot be empty');
-    }
-
-    // Security: reject path traversal and non-direct filenames
-    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-      throw new Error('Invalid filename: path separators and traversal are not allowed');
-    }
-
-    if (!filename.endsWith('.md')) {
-      throw new Error('Invalid filename: only Markdown files (.md) are allowed');
-    }
+    this.validateFilename(filename);
 
     ctx.logger.info('Retrieving document', { filename });
 
-    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
-    const filePath = path.join(knowledgeBasePath, filename);
-
-    // Ensure the resolved path is still within knowledge-base
-    const resolvedPath = path.resolve(filePath);
-    const resolvedBasePath = path.resolve(knowledgeBasePath);
-    if (!resolvedPath.startsWith(resolvedBasePath)) {
-      throw new Error('Access denied: file is outside the knowledge-base directory');
-    }
-
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`File not found: ${filename}`);
-    }
-
     try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const title = this.extractTitle(content);
+      const { content, title, fileType } = await this.readDocument(filename);
 
       ctx.logger.info('Document retrieved successfully', { filename, titleLength: title.length });
 
       return {
         filename,
         title,
+        fileType,
         content
       };
     } catch (error) {
@@ -451,23 +436,23 @@ export class KnowledgeBaseTools {
 
   @Tool({
     name: 'summarizeDocument',
-    description: 'Create a concise, source-aware summary of a Markdown document in the knowledge base',
+    description: 'Create a concise, source-aware summary of an approved document in the knowledge base',
     inputSchema: z.object({
-      filename: z.string().min(1).describe('Name of the Markdown file to summarize (for example, atlas-api-v2.md)')
+      filename: z.string().min(1).describe('Safe relative path of the document to summarize')
     })
   })
   async summarizeDocument(input: any, ctx: ExecutionContext): Promise<any> {
     const filename = input.filename?.trim();
     this.validateFilename(filename);
-    const filePath = this.resolveFilePath(filename);
 
     ctx.logger.info('Summarizing document', { filename });
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const { content, title, fileType } = await this.readDocument(filename);
     const { summary, keyPoints, headingsUsed } = this.summarizeContent(content);
 
     return {
       filename,
-      title: this.extractTitle(content),
+      title,
+      fileType,
       summary,
       keyPoints,
       headingsUsed
@@ -484,7 +469,7 @@ export class KnowledgeBaseTools {
 
   @Tool({
     name: 'compareDocuments',
-    description: 'Compare two approved Markdown documents and show meaningful additions and removals',
+    description: 'Compare two approved documents and show meaningful additions and removals',
     inputSchema: z.object({
       olderFilename: z.string().min(1).describe('Older Markdown filename, for example atlas-api-v1.md'),
       newerFilename: z.string().min(1).describe('Newer Markdown filename, for example atlas-api-v2.md')
@@ -497,10 +482,10 @@ export class KnowledgeBaseTools {
     this.validateFilename(olderFilename);
     this.validateFilename(newerFilename);
 
-    const olderPath = this.resolveFilePath(olderFilename);
-    const newerPath = this.resolveFilePath(newerFilename);
-    const olderContent = fs.readFileSync(olderPath, 'utf-8');
-    const newerContent = fs.readFileSync(newerPath, 'utf-8');
+    const olderDocument = await this.readDocument(olderFilename);
+    const newerDocument = await this.readDocument(newerFilename);
+    const olderContent = olderDocument.content;
+    const newerContent = newerDocument.content;
 
     const olderLines = this.getComparableLines(olderContent);
     const newerLines = this.getComparableLines(newerContent);
@@ -517,8 +502,8 @@ export class KnowledgeBaseTools {
     });
 
     return {
-      olderDocument: { filename: olderFilename, title: this.extractTitle(olderContent) },
-      newerDocument: { filename: newerFilename, title: this.extractTitle(newerContent) },
+      olderDocument: { filename: olderFilename, title: olderDocument.title, fileType: olderDocument.fileType },
+      newerDocument: { filename: newerFilename, title: newerDocument.title, fileType: newerDocument.fileType },
       added,
       removed,
       summary: `${added.length} meaningful addition(s) and ${removed.length} meaningful removal(s) were found.`
@@ -540,8 +525,8 @@ export class KnowledgeBaseTools {
     this.validateFilename(olderFilename);
     this.validateFilename(newerFilename);
 
-    const olderContent = fs.readFileSync(this.resolveFilePath(olderFilename), 'utf-8');
-    const newerContent = fs.readFileSync(this.resolveFilePath(newerFilename), 'utf-8');
+    const olderContent = (await this.readDocument(olderFilename)).content;
+    const newerContent = (await this.readDocument(newerFilename)).content;
     const olderLines = this.getComparableLines(olderContent);
     const newerLines = this.getComparableLines(newerContent);
     const olderSet = new Set(olderLines);
@@ -632,9 +617,9 @@ export class KnowledgeBaseTools {
       throw new Error('Knowledge base directory not found');
     }
 
-    const documents = this.getKnowledgeBaseFiles()
-      .map(filename => {
-        const content = fs.readFileSync(this.resolveFilePath(filename), 'utf-8');
+    const allDocuments = await Promise.all(this.getKnowledgeBaseFiles()
+      .map(async filename => {
+        const { content, title, fileType } = await this.readDocument(filename);
         const version = this.extractMetadata(content, 'Version');
         const status = this.extractMetadata(content, 'Status');
         const lastUpdated = this.extractMetadata(content, 'Last Updated')
@@ -652,14 +637,16 @@ export class KnowledgeBaseTools {
 
         return {
           filename,
-          title: this.extractTitle(content),
+          title,
+          fileType,
           version: version || 'Not specified',
           status: status || 'Not specified',
           lastUpdated: lastUpdated || 'Not specified',
           category: this.inferCategory(filename, content),
           lifecycleWarnings
         };
-      })
+      }));
+    const documents = allDocuments
       .filter(document => !requestedStatus || document.status.toLowerCase() === requestedStatus);
 
     const deprecatedDocuments = documents.filter(document =>
@@ -684,7 +671,7 @@ export class KnowledgeBaseTools {
 
   @Tool({
     name: 'searchKnowledgeBase',
-    description: 'Search all Markdown files in the knowledge-base folder for documents matching a query using multi-keyword ranked search',
+    description: 'Search approved Markdown, text, CSV, JSON, PDF, Word, and Excel files using multi-keyword ranked search',
     inputSchema: z.object({
       query: z.string().min(1).describe('Search query text (case-insensitive, supports multiple keywords)')
     }),
@@ -732,7 +719,7 @@ export class KnowledgeBaseTools {
       };
     }
 
-    // Read all Markdown files
+    // Read all supported files inside the approved knowledge-base tree.
     let files: string[] = [];
     try {
       files = this.getKnowledgeBaseFiles();
@@ -757,11 +744,8 @@ export class KnowledgeBaseTools {
 
     // Search each file
     for (const file of files) {
-      const filePath = this.resolveFilePath(file);
-
       try {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const title = this.extractTitle(content);
+        const { content, title, fileType } = await this.readDocument(file);
 
         // Check if document matches search criteria
         if (this.documentMatches(content, query, keywords, expandedKeywords)) {
@@ -781,7 +765,8 @@ export class KnowledgeBaseTools {
             excerpt,
             reason,
             relevanceScore: score,
-            matchedTerms
+            matchedTerms,
+            fileType
           });
 
           ctx.logger.info('Found match', {

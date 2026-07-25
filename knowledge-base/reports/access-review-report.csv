@@ -1,0 +1,4 @@
+review_date,system,owner,access_risk,required_action,status
+2024-07-12,Atlas API,Backend Engineering,High,Rotate legacy API keys and migrate OAuth clients,Open
+2024-07-12,Inventory API,Warehouse Integrations,Medium,Update v2 endpoint configuration,In Progress
+2024-07-12,Remote Work Portal,People Operations,Low,Confirm MFA training completion,Completed

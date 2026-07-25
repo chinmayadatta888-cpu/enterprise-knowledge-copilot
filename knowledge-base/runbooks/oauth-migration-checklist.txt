@@ -1,0 +1,11 @@
+Atlas OAuth Migration Checklist
+
+Status: Current
+Owner: Backend Engineering
+
+1. Register the Atlas integration client and obtain OAuth credentials.
+2. Store client secrets in the approved secret manager, never in source code.
+3. Replace API key-only authentication with OAuth bearer tokens.
+4. Update the reports integration endpoint to /analytics/reports.
+5. Verify requestId and timestamp are captured in application logs.
+6. Complete production validation before the Atlas v1 sunset date.

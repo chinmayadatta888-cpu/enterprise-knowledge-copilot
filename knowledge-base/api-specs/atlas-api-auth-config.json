@@ -1,0 +1,14 @@
+{
+  "documentTitle": "Atlas API Authentication Configuration",
+  "version": "2.0",
+  "status": "Current",
+  "authentication": {
+    "type": "OAuth 2.0",
+    "legacyApiKeyOnly": false,
+    "requiredScopes": ["atlas.read", "reports.read"]
+  },
+  "migration": {
+    "sunsetDate": "2024-06-30",
+    "requiredActions": ["register client", "obtain token", "update endpoint"]
+  }
+}

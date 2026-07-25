@@ -14,14 +14,18 @@
     "widget": "npm --prefix src/widgets"
   },
   "dependencies": {
-    "dotenv": "^16.3.1",
+    "@modelcontextprotocol/ext-apps": ">=0.1.0",
     "@nitrostack/core": "^1.0.14",
-    "zod": "^3.22.4",
-    "@modelcontextprotocol/ext-apps": ">=0.1.0"
+    "dotenv": "^16.3.1",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^1.1.4",
+    "xlsx": "^0.18.5",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@nitrostack/cli": "^1.0.15",
     "@types/node": "^22.10.0",
+    "@types/pdf-parse": "^1.1.5",
     "typescript": "^5.3.3"
   },
   "author": "Chinmaya Datta",

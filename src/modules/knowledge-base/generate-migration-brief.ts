@@ -1,6 +1,7 @@
 import { ToolDecorator as Tool, ExecutionContext, z } from '@nitrostack/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import { extractDocumentText, isSupportedDocument } from './document-extractor.js';
 
 /**
  * Role enum for migration brief generation
@@ -37,8 +38,8 @@ class MigrationBriefGenerator {
       throw new Error('Invalid filename: only safe relative paths inside knowledge-base are allowed');
     }
 
-    if (!filename.endsWith('.md')) {
-      throw new Error('Invalid filename: only Markdown files (.md) are allowed');
+    if (!isSupportedDocument(filename)) {
+      throw new Error('Unsupported file type. Allowed types: .md, .txt, .csv, .json, .pdf, .docx, .xlsx');
     }
   }
 
@@ -63,6 +64,10 @@ class MigrationBriefGenerator {
     }
 
     return filePath;
+  }
+
+  private async readDocument(filename: string): Promise<string> {
+    return extractDocumentText(this.resolveFilePath(filename));
   }
 
   /**
@@ -120,11 +125,8 @@ class MigrationBriefGenerator {
     this.validateFilename(olderFilename);
     this.validateFilename(newerFilename);
 
-    const olderPath = this.resolveFilePath(olderFilename);
-    const newerPath = this.resolveFilePath(newerFilename);
-
-    const olderContent = fs.readFileSync(olderPath, 'utf-8');
-    const newerContent = fs.readFileSync(newerPath, 'utf-8');
+    const olderContent = await this.readDocument(olderFilename);
+    const newerContent = await this.readDocument(newerFilename);
 
     ctx.logger.info('Generating migration brief', { olderFilename, newerFilename, role });
 
