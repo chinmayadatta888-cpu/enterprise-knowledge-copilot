@@ -328,6 +328,83 @@ export class KnowledgeBaseTools {
   }
 
   @Tool({
+    name: 'analyzeChangeImpact',
+    description: 'Analyze two document versions to identify affected teams, change priority, and recommended actions',
+    inputSchema: z.object({
+      olderFilename: z.string().min(1).describe('Older Markdown filename, for example atlas-api-v1.md'),
+      newerFilename: z.string().min(1).describe('Newer Markdown filename, for example atlas-api-v2.md')
+    })
+  })
+  async analyzeChangeImpact(input: any, ctx: ExecutionContext): Promise<any> {
+    const olderFilename = input.olderFilename?.trim();
+    const newerFilename = input.newerFilename?.trim();
+    this.validateFilename(olderFilename);
+    this.validateFilename(newerFilename);
+
+    const olderContent = fs.readFileSync(this.resolveFilePath(olderFilename), 'utf-8');
+    const newerContent = fs.readFileSync(this.resolveFilePath(newerFilename), 'utf-8');
+    const olderLines = this.getComparableLines(olderContent);
+    const newerLines = this.getComparableLines(newerContent);
+    const olderSet = new Set(olderLines);
+    const added = newerLines.filter(line => !olderSet.has(line));
+    const removed = olderLines.filter(line => !new Set(newerLines).has(line));
+    const changeText = `${added.join(' ')} ${removed.join(' ')}`.toLowerCase();
+
+    const affectedTeams = new Set<string>();
+    const recommendedActions = new Set<string>();
+    let priority: 'critical' | 'high' | 'medium' | 'low' = 'low';
+    const raisePriority = (candidate: typeof priority) => {
+      const levels = { low: 0, medium: 1, high: 2, critical: 3 };
+      if (levels[candidate] > levels[priority]) priority = candidate;
+    };
+
+    if (/oauth|authentication|authorization|token|security/.test(changeText)) {
+      affectedTeams.add('Backend Engineering');
+      affectedTeams.add('Security');
+      recommendedActions.add('Update authentication configuration and securely obtain the required OAuth credentials.');
+      raisePriority('critical');
+    }
+    if (/endpoint|\/reports|\/analytics/.test(changeText)) {
+      affectedTeams.add('Backend Engineering');
+      affectedTeams.add('Frontend and Integrations');
+      recommendedActions.add('Update API endpoint URLs in all client integrations.');
+      raisePriority('high');
+    }
+    if (/deprecated|removed|sunset|backward-incompatible|410 gone/.test(changeText)) {
+      affectedTeams.add('Backend Engineering');
+      affectedTeams.add('Customer Success');
+      recommendedActions.add('Remove deprecated field usage and communicate the migration deadline to affected users.');
+      raisePriority('high');
+    }
+    if (/requestid|timestamp|metadata|parser/.test(changeText)) {
+      affectedTeams.add('Backend Engineering');
+      recommendedActions.add('Update response parsers and logging to handle the new metadata fields.');
+      raisePriority('medium');
+    }
+    if (/rate limit|rate-limit/.test(changeText)) {
+      affectedTeams.add('Platform Engineering');
+      recommendedActions.add('Review client retry behaviour and update rate-limit monitoring thresholds.');
+      raisePriority('medium');
+    }
+    if (affectedTeams.size === 0) {
+      affectedTeams.add('Document Owners');
+      recommendedActions.add('Review the changes and confirm whether downstream teams need to act.');
+      raisePriority('low');
+    }
+
+    ctx.logger.info('Change impact analyzed', { olderFilename, newerFilename, priority, affectedTeams: [...affectedTeams] });
+    return {
+      olderFilename,
+      newerFilename,
+      priority,
+      affectedTeams: [...affectedTeams],
+      recommendedActions: [...recommendedActions],
+      changeHighlights: added.slice(0, 8),
+      removedHighlights: removed.slice(0, 5)
+    };
+  }
+
+  @Tool({
     name: 'searchKnowledgeBase',
     description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
     inputSchema: z.object({
