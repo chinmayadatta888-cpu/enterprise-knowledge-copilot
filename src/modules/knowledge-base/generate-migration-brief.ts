@@ -31,9 +31,10 @@ class MigrationBriefGenerator {
       throw new Error('Filename parameter is required and cannot be empty');
     }
 
-    // Security: reject path traversal and non-direct filenames
-    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-      throw new Error('Invalid filename: path separators and traversal are not allowed');
+    const normalized = filename.replace(/\\/g, '/');
+    // Allow approved subfolders, but never allow paths to escape the knowledge base.
+    if (normalized.startsWith('/') || normalized.split('/').some(segment => segment === '..' || segment.length === 0)) {
+      throw new Error('Invalid filename: only safe relative paths inside knowledge-base are allowed');
     }
 
     if (!filename.endsWith('.md')) {
@@ -45,13 +46,14 @@ class MigrationBriefGenerator {
    * Resolve and validate file path is within knowledge-base
    */
   private resolveFilePath(filename: string): string {
-    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
-    const filePath = path.join(knowledgeBasePath, filename);
+    const knowledgeBasePath = path.resolve(process.cwd(), 'knowledge-base');
+    const filePath = path.resolve(knowledgeBasePath, filename.replace(/\\/g, '/'));
 
     // Ensure the resolved path is still within knowledge-base
     const resolvedPath = path.resolve(filePath);
     const resolvedBasePath = path.resolve(knowledgeBasePath);
-    if (!resolvedPath.startsWith(resolvedBasePath)) {
+    const relativePath = path.relative(resolvedBasePath, resolvedPath);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error('Access denied: file is outside the knowledge-base directory');
     }
 

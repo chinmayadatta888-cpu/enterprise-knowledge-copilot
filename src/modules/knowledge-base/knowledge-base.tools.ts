@@ -199,9 +199,10 @@ export class KnowledgeBaseTools {
       throw new Error('Filename parameter is required and cannot be empty');
     }
 
-    // Security: reject path traversal and non-direct filenames
-    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-      throw new Error('Invalid filename: path separators and traversal are not allowed');
+    const normalized = filename.replace(/\\/g, '/');
+    // Allow approved subfolders, but never allow paths to escape the knowledge base.
+    if (normalized.startsWith('/') || normalized.split('/').some(segment => segment === '..' || segment.length === 0)) {
+      throw new Error('Invalid filename: only safe relative paths inside knowledge-base are allowed');
     }
 
     if (!filename.endsWith('.md')) {
@@ -213,13 +214,14 @@ export class KnowledgeBaseTools {
    * Resolve and validate file path is within knowledge-base
    */
   private resolveFilePath(filename: string): string {
-    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
-    const filePath = path.join(knowledgeBasePath, filename);
+    const knowledgeBasePath = path.resolve(process.cwd(), 'knowledge-base');
+    const filePath = path.resolve(knowledgeBasePath, filename.replace(/\\/g, '/'));
 
     // Ensure the resolved path is still within knowledge-base
     const resolvedPath = path.resolve(filePath);
     const resolvedBasePath = path.resolve(knowledgeBasePath);
-    if (!resolvedPath.startsWith(resolvedBasePath)) {
+    const relativePath = path.relative(resolvedBasePath, resolvedPath);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error('Access denied: file is outside the knowledge-base directory');
     }
 
@@ -229,6 +231,21 @@ export class KnowledgeBaseTools {
     }
 
     return filePath;
+  }
+
+  /** Return every approved Markdown file beneath the knowledge-base root. */
+  private getKnowledgeBaseFiles(): string[] {
+    const knowledgeBasePath = path.resolve(process.cwd(), 'knowledge-base');
+    const walk = (directory: string): string[] => fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return walk(fullPath);
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        return [path.relative(knowledgeBasePath, fullPath).split(path.sep).join('/')];
+      }
+      return [];
+    });
+
+    return fs.existsSync(knowledgeBasePath) ? walk(knowledgeBasePath).sort() : [];
   }
 
   /**
@@ -615,11 +632,9 @@ export class KnowledgeBaseTools {
       throw new Error('Knowledge base directory not found');
     }
 
-    const documents = fs.readdirSync(knowledgeBasePath)
-      .filter(file => file.endsWith('.md'))
-      .sort()
+    const documents = this.getKnowledgeBaseFiles()
       .map(filename => {
-        const content = fs.readFileSync(path.join(knowledgeBasePath, filename), 'utf-8');
+        const content = fs.readFileSync(this.resolveFilePath(filename), 'utf-8');
         const version = this.extractMetadata(content, 'Version');
         const status = this.extractMetadata(content, 'Status');
         const lastUpdated = this.extractMetadata(content, 'Last Updated')
@@ -720,9 +735,7 @@ export class KnowledgeBaseTools {
     // Read all Markdown files
     let files: string[] = [];
     try {
-      files = fs.readdirSync(knowledgeBasePath)
-        .filter(file => file.endsWith('.md'))
-        .sort();
+      files = this.getKnowledgeBaseFiles();
     } catch (error) {
       ctx.logger.error('Failed to read knowledge base directory', {
         error: error instanceof Error ? error.message : String(error)
@@ -744,7 +757,7 @@ export class KnowledgeBaseTools {
 
     // Search each file
     for (const file of files) {
-      const filePath = path.join(knowledgeBasePath, file);
+      const filePath = this.resolveFilePath(file);
 
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
