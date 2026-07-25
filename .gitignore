@@ -55,3 +55,4 @@ uploads/
 *.pem
 *.key
 tokens.json
+.nitrostudio/
