@@ -1,0 +1,220 @@
+import { ToolDecorator as Tool, ExecutionContext, z } from '@nitrostack/core';
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface KnowledgeBaseMatch {
+  filename: string;
+  title: string;
+  excerpt: string;
+  reason: string;
+}
+
+export class KnowledgeBaseTools {
+  /**
+   * Extract title from Markdown frontmatter or first heading
+   */
+  private extractTitle(content: string): string {
+    // Try to extract from H1 heading
+    const h1Match = content.match(/^#\s+(.+)$/m);
+    if (h1Match) {
+      return h1Match[1].trim();
+    }
+    return 'Untitled Document';
+  }
+
+  /**
+   * Extract a relevant excerpt around the matched query
+   */
+  private extractExcerpt(content: string, query: string, maxLength: number = 150): string {
+    const lowerContent = content.toLowerCase();
+    const lowerQuery = query.toLowerCase();
+    const matchIndex = lowerContent.indexOf(lowerQuery);
+
+    if (matchIndex === -1) {
+      // Fallback: return first non-empty line
+      const lines = content.split('\n').filter(line => line.trim().length > 0);
+      return lines[0]?.substring(0, maxLength) || 'No preview available';
+    }
+
+    // Extract context around the match
+    const start = Math.max(0, matchIndex - 50);
+    const end = Math.min(content.length, matchIndex + query.length + 100);
+    let excerpt = content.substring(start, end).trim();
+
+    // Clean up excerpt
+    excerpt = excerpt.replace(/\n+/g, ' ').replace(/#+\s+/g, '');
+    if (excerpt.length > maxLength) {
+      excerpt = excerpt.substring(0, maxLength) + '...';
+    }
+
+    return excerpt;
+  }
+
+  /**
+   * Calculate relevance score based on match type
+   */
+  private calculateRelevance(
+    filename: string,
+    title: string,
+    content: string,
+    query: string
+  ): { score: number; reason: string } {
+    const lowerQuery = query.toLowerCase();
+    const lowerContent = content.toLowerCase();
+    const lowerTitle = title.toLowerCase();
+    const lowerFilename = filename.toLowerCase();
+
+    let score = 0;
+    let reasons: string[] = [];
+
+    // Title match (highest priority)
+    if (lowerTitle.includes(lowerQuery)) {
+      score += 100;
+      reasons.push('Found in title');
+    }
+
+    // Filename match
+    if (lowerFilename.includes(lowerQuery)) {
+      score += 50;
+      reasons.push('Found in filename');
+    }
+
+    // Content match - count occurrences
+    const matches = (lowerContent.match(new RegExp(lowerQuery, 'g')) || []).length;
+    score += Math.min(matches * 10, 50);
+    if (matches > 0) {
+      reasons.push(`Found ${matches} time${matches > 1 ? 's' : ''} in content`);
+    }
+
+    // Heading proximity (if found in a heading)
+    const headingMatch = content.match(new RegExp(`^#+\\s+.*${lowerQuery}.*$`, 'mi'));
+    if (headingMatch) {
+      score += 30;
+      reasons.push('Found in section heading');
+    }
+
+    return {
+      score,
+      reason: reasons.join('; ') || 'Matched query'
+    };
+  }
+
+  @Tool({
+    name: 'searchKnowledgeBase',
+    description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
+    inputSchema: z.object({
+      query: z.string().min(1).describe('Search query text (case-insensitive)')
+    }),
+    examples: {
+      request: {
+        query: 'API authentication'
+      },
+      response: {
+        matches: [
+          {
+            filename: 'atlas-api-v2.md',
+            title: 'Atlas API v2 Documentation',
+            excerpt: 'Atlas API v2 requires both API key and OAuth 2.0 token for enhanced security...',
+            reason: 'Found in title and content'
+          }
+        ],
+        total: 1,
+        query: 'API authentication'
+      }
+    }
+  })
+  async searchKnowledgeBase(input: any, ctx: ExecutionContext): Promise<any> {
+    const query = input.query?.trim();
+
+    if (!query) {
+      throw new Error('Query parameter is required and cannot be empty');
+    }
+
+    ctx.logger.info('Searching knowledge base', { query });
+
+    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
+
+    // Check if knowledge-base directory exists
+    if (!fs.existsSync(knowledgeBasePath)) {
+      ctx.logger.warn('Knowledge base directory not found', { path: knowledgeBasePath });
+      return {
+        matches: [],
+        total: 0,
+        query,
+        message: 'Knowledge base directory not found'
+      };
+    }
+
+    // Read all Markdown files
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(knowledgeBasePath)
+        .filter(file => file.endsWith('.md'))
+        .sort();
+    } catch (error) {
+      ctx.logger.error('Failed to read knowledge base directory', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw new Error('Failed to read knowledge base directory');
+    }
+
+    const matches: KnowledgeBaseMatch[] = [];
+
+    // Search each file
+    for (const file of files) {
+      const filePath = path.join(knowledgeBasePath, file);
+
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const lowerContent = content.toLowerCase();
+        const lowerQuery = query.toLowerCase();
+
+        // Check if query matches anywhere in the file
+        if (lowerContent.includes(lowerQuery)) {
+          const title = this.extractTitle(content);
+          const excerpt = this.extractExcerpt(content, query);
+          const { score, reason } = this.calculateRelevance(file, title, content, query);
+
+          matches.push({
+            filename: file,
+            title,
+            excerpt,
+            reason
+          });
+
+          ctx.logger.info('Found match', {
+            filename: file,
+            score,
+            reason
+          });
+        }
+      } catch (error) {
+        ctx.logger.warn('Failed to read file', {
+          file,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    // Sort by relevance (higher scores first)
+    matches.sort((a, b) => {
+      // Extract score from reason if available, otherwise use 0
+      const scoreA = a.reason.includes('Found in title') ? 100 : 0;
+      const scoreB = b.reason.includes('Found in title') ? 100 : 0;
+      return scoreB - scoreA;
+    });
+
+    ctx.logger.info('Search complete', {
+      query,
+      matchCount: matches.length,
+      filesSearched: files.length
+    });
+
+    return {
+      matches,
+      total: matches.length,
+      query,
+      filesSearched: files.length
+    };
+  }
+}
