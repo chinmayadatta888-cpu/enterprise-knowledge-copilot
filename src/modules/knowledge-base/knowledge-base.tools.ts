@@ -11,6 +11,46 @@ interface KnowledgeBaseMatch {
 
 export class KnowledgeBaseTools {
   /**
+   * Validate filename for safe access (reusable across tools)
+   */
+  private validateFilename(filename: string): void {
+    if (!filename) {
+      throw new Error('Filename parameter is required and cannot be empty');
+    }
+
+    // Security: reject path traversal and non-direct filenames
+    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+      throw new Error('Invalid filename: path separators and traversal are not allowed');
+    }
+
+    if (!filename.endsWith('.md')) {
+      throw new Error('Invalid filename: only Markdown files (.md) are allowed');
+    }
+  }
+
+  /**
+   * Resolve and validate file path is within knowledge-base
+   */
+  private resolveFilePath(filename: string): string {
+    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
+    const filePath = path.join(knowledgeBasePath, filename);
+
+    // Ensure the resolved path is still within knowledge-base
+    const resolvedPath = path.resolve(filePath);
+    const resolvedBasePath = path.resolve(knowledgeBasePath);
+    if (!resolvedPath.startsWith(resolvedBasePath)) {
+      throw new Error('Access denied: file is outside the knowledge-base directory');
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filename}`);
+    }
+
+    return filePath;
+  }
+
+  /**
    * Extract title from Markdown frontmatter or first heading
    */
   private extractTitle(content: string): string {
@@ -20,6 +60,48 @@ export class KnowledgeBaseTools {
       return h1Match[1].trim();
     }
     return 'Untitled Document';
+  }
+
+  /** Extract Markdown section headings for source references. */
+  private extractHeadings(content: string): string[] {
+    return content
+      .split('\n')
+      .map(line => line.match(/^#{2,3}\s+(.+)$/))
+      .filter((match): match is RegExpMatchArray => Boolean(match))
+      .map(match => match[1].trim());
+  }
+
+  /** Convert a Markdown line into readable plain text. */
+  private stripMarkdown(line: string): string {
+    return line
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^[-*+]\s+/, '')
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/`(.*?)`/g, '$1')
+      .trim();
+  }
+
+  /** Build a compact deterministic summary without calling an external AI service. */
+  private summarizeContent(content: string): { summary: string; keyPoints: string[]; headingsUsed: string[] } {
+    const headingsUsed = this.extractHeadings(content);
+    const lines = content
+      .split('\n')
+      .map(line => this.stripMarkdown(line))
+      .filter(line => line.length > 25 && !line.startsWith('---'));
+
+    const summary = lines[0] || 'This document does not contain enough text to summarize.';
+    const keyPoints = Array.from(new Set(lines.slice(1, 6))).slice(0, 5);
+
+    if (keyPoints.length < 3) {
+      for (const heading of headingsUsed) {
+        if (!keyPoints.includes(heading)) {
+          keyPoints.push(heading);
+        }
+        if (keyPoints.length === 3) break;
+      }
+    }
+
+    return { summary, keyPoints, headingsUsed };
   }
 
   /**
@@ -167,6 +249,31 @@ export class KnowledgeBaseTools {
       });
       throw new Error(`Failed to read document: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  @Tool({
+    name: 'summarizeDocument',
+    description: 'Create a concise, source-aware summary of a Markdown document in the knowledge base',
+    inputSchema: z.object({
+      filename: z.string().min(1).describe('Name of the Markdown file to summarize (for example, atlas-api-v2.md)')
+    })
+  })
+  async summarizeDocument(input: any, ctx: ExecutionContext): Promise<any> {
+    const filename = input.filename?.trim();
+    this.validateFilename(filename);
+    const filePath = this.resolveFilePath(filename);
+
+    ctx.logger.info('Summarizing document', { filename });
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const { summary, keyPoints, headingsUsed } = this.summarizeContent(content);
+
+    return {
+      filename,
+      title: this.extractTitle(content),
+      summary,
+      keyPoints,
+      headingsUsed
+    };
   }
 
   @Tool({
