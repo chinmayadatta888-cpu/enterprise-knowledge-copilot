@@ -100,6 +100,76 @@ export class KnowledgeBaseTools {
   }
 
   @Tool({
+    name: 'getDocument',
+    description: 'Retrieve a Markdown document from the knowledge-base folder by filename',
+    inputSchema: z.object({
+      filename: z.string().min(1).describe('Name of the Markdown file to retrieve (e.g., atlas-api-v2.md)')
+    }),
+    examples: {
+      request: {
+        filename: 'atlas-api-v2.md'
+      },
+      response: {
+        filename: 'atlas-api-v2.md',
+        title: 'Atlas API v2 Documentation',
+        content: '# Atlas API v2 Documentation\n\nAtlas API v2 requires...'
+      }
+    }
+  })
+  async getDocument(input: any, ctx: ExecutionContext): Promise<any> {
+    const filename = input.filename?.trim();
+
+    if (!filename) {
+      throw new Error('Filename parameter is required and cannot be empty');
+    }
+
+    // Security: reject path traversal and non-direct filenames
+    if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
+      throw new Error('Invalid filename: path separators and traversal are not allowed');
+    }
+
+    if (!filename.endsWith('.md')) {
+      throw new Error('Invalid filename: only Markdown files (.md) are allowed');
+    }
+
+    ctx.logger.info('Retrieving document', { filename });
+
+    const knowledgeBasePath = path.join(process.cwd(), 'knowledge-base');
+    const filePath = path.join(knowledgeBasePath, filename);
+
+    // Ensure the resolved path is still within knowledge-base
+    const resolvedPath = path.resolve(filePath);
+    const resolvedBasePath = path.resolve(knowledgeBasePath);
+    if (!resolvedPath.startsWith(resolvedBasePath)) {
+      throw new Error('Access denied: file is outside the knowledge-base directory');
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filename}`);
+    }
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const title = this.extractTitle(content);
+
+      ctx.logger.info('Document retrieved successfully', { filename, titleLength: title.length });
+
+      return {
+        filename,
+        title,
+        content
+      };
+    } catch (error) {
+      ctx.logger.error('Failed to read document', {
+        filename,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw new Error(`Failed to read document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  @Tool({
     name: 'searchKnowledgeBase',
     description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
     inputSchema: z.object({
