@@ -7,9 +7,190 @@ interface KnowledgeBaseMatch {
   title: string;
   excerpt: string;
   reason: string;
+  relevanceScore: number;
+  matchedTerms: string[];
 }
 
+/**
+ * Local synonym map for enterprise search terms.
+ * Deterministic and local — no AI generation.
+ */
+const SYNONYM_MAP: Record<string, string[]> = {
+  authentication: ['login', 'oauth', 'token', 'authorization'],
+  integration: ['endpoint', 'api', 'migration'],
+  deprecated: ['sunset', 'retired', 'removed'],
+  incident: ['issue', 'report']
+};
+
+/**
+ * Common stop words to filter out during query normalization.
+ */
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'is', 'are', 'what', 'how', 'show', 'me', 'find',
+  'document', 'about', 'for', 'and', 'or', 'to', 'of', 'in'
+]);
+
 export class KnowledgeBaseTools {
+  /**
+   * Normalize query safely: lowercase, remove punctuation, split into keywords, filter stop words.
+   */
+  private normalizeQuery(query: string): string[] {
+    // Lowercase
+    let normalized = query.toLowerCase();
+
+    // Remove punctuation safely using character whitelist
+    // Keep only alphanumeric, spaces, and hyphens
+    normalized = normalized.replace(/[^a-z0-9\s\-]/g, '');
+
+    // Split on whitespace and hyphens
+    const tokens = normalized.split(/[\s\-]+/).filter(token => token.length > 0);
+
+    // Filter out stop words
+    return tokens.filter(token => !STOP_WORDS.has(token));
+  }
+
+  /**
+   * Expand keywords using the synonym map.
+   * Returns the original keyword plus all synonyms.
+   */
+  private expandKeywords(keywords: string[]): string[] {
+    const expanded = new Set<string>();
+
+    for (const keyword of keywords) {
+      expanded.add(keyword);
+
+      // Check if this keyword is a key in the synonym map
+      if (SYNONYM_MAP[keyword]) {
+        SYNONYM_MAP[keyword].forEach(syn => expanded.add(syn));
+      }
+
+      // Check if this keyword is a synonym of any key
+      for (const [key, synonyms] of Object.entries(SYNONYM_MAP)) {
+        if (synonyms.includes(keyword)) {
+          expanded.add(key);
+          synonyms.forEach(syn => expanded.add(syn));
+        }
+      }
+    }
+
+    return Array.from(expanded);
+  }
+
+  /**
+   * Calculate relevance score for a document based on keyword matches.
+   * Scoring:
+   * - Title match: +100 per keyword
+   * - Section heading match: +50 per keyword
+   * - Filename match: +30 per keyword
+   * - Full-content match: +10 per keyword
+   * - Exact phrase bonus: +25
+   */
+  private calculateKeywordRelevance(
+    filename: string,
+    title: string,
+    content: string,
+    originalQuery: string,
+    keywords: string[],
+    expandedKeywords: string[]
+  ): { score: number; matchedTerms: string[]; reason: string } {
+    const lowerTitle = title.toLowerCase();
+    const lowerFilename = filename.toLowerCase();
+    const lowerContent = content.toLowerCase();
+
+    let score = 0;
+    const matchedTerms = new Set<string>();
+    const reasons: string[] = [];
+
+    // Check for exact phrase match (bonus)
+    const lowerQuery = originalQuery.toLowerCase();
+    if (lowerContent.includes(lowerQuery)) {
+      score += 25;
+      reasons.push('Exact phrase match');
+    }
+
+    // Check each expanded keyword
+    for (const keyword of expandedKeywords) {
+      // Title match (strongest)
+      if (lowerTitle.includes(keyword)) {
+        score += 100;
+        matchedTerms.add(keyword);
+        if (!reasons.includes('Title match')) reasons.push('Title match');
+      }
+
+      // Section heading match
+      const headingRegex = new RegExp(`^#+\\s+.*${keyword}.*$`, 'mi');
+      if (headingRegex.test(content)) {
+        score += 50;
+        matchedTerms.add(keyword);
+        if (!reasons.includes('Section heading match')) reasons.push('Section heading match');
+      }
+
+      // Filename match
+      if (lowerFilename.includes(keyword)) {
+        score += 30;
+        matchedTerms.add(keyword);
+        if (!reasons.includes('Filename match')) reasons.push('Filename match');
+      }
+
+      // Full-content match
+      if (lowerContent.includes(keyword)) {
+        score += 10;
+        matchedTerms.add(keyword);
+        if (!reasons.includes('Content match')) reasons.push('Content match');
+      }
+    }
+
+    return {
+      score,
+      matchedTerms: Array.from(matchedTerms),
+      reason: reasons.join('; ') || 'Matched query'
+    };
+  }
+
+  /**
+   * Check if a document matches the search criteria.
+   * Matches if:
+   * - Exact phrase appears, OR
+   * - A single meaningful keyword matches, OR
+   * - At least two meaningful query keywords match
+   */
+  private documentMatches(
+    content: string,
+    originalQuery: string,
+    keywords: string[],
+    expandedKeywords: string[]
+  ): boolean {
+    const lowerContent = content.toLowerCase();
+    const lowerQuery = originalQuery.toLowerCase();
+
+    // Exact phrase match
+    if (lowerContent.includes(lowerQuery)) {
+      return true;
+    }
+
+    // Count how many expanded keywords match
+    let matchCount = 0;
+    for (const keyword of expandedKeywords) {
+      if (lowerContent.includes(keyword)) {
+        matchCount++;
+      }
+    }
+
+    // Match if at least one keyword matches, or at least two original keywords match
+    if (matchCount >= 1) {
+      return true;
+    }
+
+    // Check if at least two original keywords match
+    let originalKeywordMatches = 0;
+    for (const keyword of keywords) {
+      if (lowerContent.includes(keyword)) {
+        originalKeywordMatches++;
+      }
+    }
+
+    return originalKeywordMatches >= 2;
+  }
   /**
    * Validate filename for safe access (reusable across tools)
    */
@@ -488,9 +669,9 @@ export class KnowledgeBaseTools {
 
   @Tool({
     name: 'searchKnowledgeBase',
-    description: 'Search all Markdown files in the knowledge-base folder for documents matching a query',
+    description: 'Search all Markdown files in the knowledge-base folder for documents matching a query using multi-keyword ranked search',
     inputSchema: z.object({
-      query: z.string().min(1).describe('Search query text (case-insensitive)')
+      query: z.string().min(1).describe('Search query text (case-insensitive, supports multiple keywords)')
     }),
     examples: {
       request: {
@@ -502,11 +683,14 @@ export class KnowledgeBaseTools {
             filename: 'atlas-api-v2.md',
             title: 'Atlas API v2 Documentation',
             excerpt: 'Atlas API v2 requires both API key and OAuth 2.0 token for enhanced security...',
-            reason: 'Found in title and content'
+            relevanceScore: 135,
+            matchedTerms: ['api', 'authentication', 'oauth'],
+            reason: 'Exact phrase match; Title match; Content match'
           }
         ],
         total: 1,
-        query: 'API authentication'
+        query: 'API authentication',
+        filesSearched: 5
       }
     }
   })
@@ -528,7 +712,8 @@ export class KnowledgeBaseTools {
         matches: [],
         total: 0,
         query,
-        message: 'Knowledge base directory not found'
+        message: 'Knowledge base directory not found',
+        filesSearched: 0
       };
     }
 
@@ -545,6 +730,16 @@ export class KnowledgeBaseTools {
       throw new Error('Failed to read knowledge base directory');
     }
 
+    // Normalize and expand query keywords
+    const keywords = this.normalizeQuery(query);
+    const expandedKeywords = this.expandKeywords(keywords);
+
+    ctx.logger.info('Query normalized', {
+      originalQuery: query,
+      keywords,
+      expandedKeywords
+    });
+
     const matches: KnowledgeBaseMatch[] = [];
 
     // Search each file
@@ -553,25 +748,33 @@ export class KnowledgeBaseTools {
 
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
-        const lowerContent = content.toLowerCase();
-        const lowerQuery = query.toLowerCase();
+        const title = this.extractTitle(content);
 
-        // Check if query matches anywhere in the file
-        if (lowerContent.includes(lowerQuery)) {
-          const title = this.extractTitle(content);
+        // Check if document matches search criteria
+        if (this.documentMatches(content, query, keywords, expandedKeywords)) {
           const excerpt = this.extractExcerpt(content, query);
-          const { score, reason } = this.calculateRelevance(file, title, content, query);
+          const { score, matchedTerms, reason } = this.calculateKeywordRelevance(
+            file,
+            title,
+            content,
+            query,
+            keywords,
+            expandedKeywords
+          );
 
           matches.push({
             filename: file,
             title,
             excerpt,
-            reason
+            reason,
+            relevanceScore: score,
+            matchedTerms
           });
 
           ctx.logger.info('Found match', {
             filename: file,
             score,
+            matchedTerms,
             reason
           });
         }
@@ -583,25 +786,24 @@ export class KnowledgeBaseTools {
       }
     }
 
-    // Sort by relevance (higher scores first)
-    matches.sort((a, b) => {
-      // Extract score from reason if available, otherwise use 0
-      const scoreA = a.reason.includes('Found in title') ? 100 : 0;
-      const scoreB = b.reason.includes('Found in title') ? 100 : 0;
-      return scoreB - scoreA;
-    });
+    // Sort by relevance score (highest first) and limit to top 5
+    matches.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    const topMatches = matches.slice(0, 5);
 
     ctx.logger.info('Search complete', {
       query,
-      matchCount: matches.length,
+      matchCount: topMatches.length,
+      totalMatches: matches.length,
       filesSearched: files.length
     });
 
     return {
-      matches,
-      total: matches.length,
+      matches: topMatches,
+      total: topMatches.length,
       query,
-      filesSearched: files.length
+      filesSearched: files.length,
+      keywordsUsed: keywords,
+      expandedKeywordsUsed: expandedKeywords
     };
   }
 }
